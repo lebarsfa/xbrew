@@ -6,7 +6,7 @@ print_help() {
 xbrew — Install or reinstall a Homebrew formula from a specific commit
 
 Installation:
-  wget https://webperso.ensta.fr/lebars/Share/xbrew.sh
+  wget https://github.com/lebarsfa/xbrew/releases/latest/download/xbrew.sh
   sudo mv xbrew.sh /usr/local/bin/xbrew
   sudo chmod +x /usr/local/bin/xbrew
 
