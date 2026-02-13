@@ -224,9 +224,9 @@ else
     RAW_URL="$COMMIT_OR_URL"
   else
     # Build candidate raw URLs depending on TYPE (new layout with first-letter subdir, then legacy layout)
-    first_letter="$(echo "${NAME:0:1}" | tr '[:upper:]' '[:lower:]')"
+    FIRST_LETTER=$(printf '%s' "$NAME" | cut -c1 | tr '[:upper:]' '[:lower:]')  # Portable, POSIX-friendly first letter (always lower-case)
     if [[ "$TYPE" == "cask" ]]; then
-      RAW_URL_CAND1="https://raw.githubusercontent.com/Homebrew/homebrew-cask/${COMMIT_OR_URL}/Casks/${first_letter}/${NAME}.rb"
+      RAW_URL_CAND1="https://raw.githubusercontent.com/Homebrew/homebrew-cask/${COMMIT_OR_URL}/Casks/${FIRST_LETTER}/${NAME}.rb"
       RAW_URL_CAND2="https://raw.githubusercontent.com/Homebrew/homebrew-cask/${COMMIT_OR_URL}/Casks/${NAME}.rb"
       if url_exists "$RAW_URL_CAND1"; then
         RAW_URL="$RAW_URL_CAND1"
@@ -235,7 +235,7 @@ else
         echo "Warning: falling back to the legacy layout for the raw URL."
       fi
     else
-      RAW_URL_CAND1="https://raw.githubusercontent.com/Homebrew/homebrew-core/${COMMIT_OR_URL}/Formula/${first_letter}/${NAME}.rb"
+      RAW_URL_CAND1="https://raw.githubusercontent.com/Homebrew/homebrew-core/${COMMIT_OR_URL}/Formula/${FIRST_LETTER}/${NAME}.rb"
       RAW_URL_CAND2="https://raw.githubusercontent.com/Homebrew/homebrew-core/${COMMIT_OR_URL}/Formula/${NAME}.rb"
       if url_exists "$RAW_URL_CAND1"; then
         RAW_URL="$RAW_URL_CAND1"
@@ -263,7 +263,7 @@ echo "Source: $RAW_URL"
 echo
 
 # Create tap if missing
-if ! brew tap | grep -q "^${TAP}\$"; then
+if ! brew tap | grep -Fxq "${TAP}"; then
   echo "Creating tap ${TAP}..."
   brew tap-new "${TAP}"
 else
@@ -306,7 +306,11 @@ fi
 
 # Move into tap repo and commit if changed, with git user fallback
 DEST="${TAP_REPO}/${DEST_DIR}/${NAME}.rb"
-mv "${TMP_FILE}" "${DEST}"
+if ! mv "$TMP_FILE" "$DEST"; then
+  echo "Error: failed to move downloaded file to ${DEST}." >&2
+  echo "Possible causes: insufficient permissions, read-only filesystem, or no disk space." >&2
+  exit 6
+fi
 cd "${TAP_REPO}"
 
 git add "${DEST_DIR}/${NAME}.rb"
