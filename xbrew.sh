@@ -72,16 +72,21 @@ EOF
 
 # Helper: test whether a URL exists (use HEAD; fall back to GET if HEAD unsupported)
 url_exists() {
-    local url="$1"
-    # try HEAD first
-    if curl -fsI --retry 2 --retry-delay 1 "$url" >/dev/null 2>&1; then
+  local url="$1"
+  # try HEAD first
+  if curl -fsI --retry 2 --retry-delay 1 "$url" >/dev/null 2>&1; then
     return 0
-    fi
-    # fallback to a lightweight GET (some servers don't support HEAD)
-    if curl -fsS --retry 2 --retry-delay 1 --max-time 10 -o /dev/null "$url"; then
+  fi
+  # fallback to a lightweight GET (some servers don't support HEAD)
+  if curl -fsS --retry 2 --retry-delay 1 --max-time 10 -o /dev/null "$url"; then
     return 0
-    fi
-    return 1
+  fi
+  return 1
+}
+
+# Helper: test whether a string looks like a URL
+is_url() {
+  [[ "$1" =~ ^https?:// ]]
 }
 
 # show help early if requested
@@ -112,9 +117,6 @@ if [[ "$ACTION" != "install" && "$ACTION" != "reinstall" ]]; then
 fi
 
 # Determine whether the user passed a URL as the second argument (short form)
-is_url() {
-  [[ "$1" =~ ^https?:// ]]
-}
 
 if is_url "$ARG2"; then
   # Short form: ACTION <raw-url> [tap]
