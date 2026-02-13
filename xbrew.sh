@@ -109,10 +109,9 @@ fi
 command -v brew >/dev/null 2>&1 || { echo "Error: brew not found in PATH."; exit 4; }
 command -v git >/dev/null 2>&1 || { echo "Error: git not found in PATH."; exit 4; }
 
+# Basic args parsing
 ACTION="${1:-}"
-ARG2="${2:-}"
-ARG3="${3:-}"
-ARG4="${4:-}"
+shift || true
 
 # Basic validation of action
 if [[ -z "$ACTION" ]]; then
@@ -127,36 +126,95 @@ if [[ "$ACTION" != "install" && "$ACTION" != "reinstall" ]]; then
   exit 2
 fi
 
-# Determine whether the user passed a URL as the second argument (short form)
-
 # Default type
 TYPE="formula"
 
-if is_url "$ARG2"; then
-  # Short form: ACTION <raw-url> [tap]
-  RAW_URL="$ARG2"
-  TAP="${ARG3:-${USER}/local}"
+# Optional explicit type flag
+if [[ "${1:-}" == "--formula" || "${1:-}" == "--cask" ]]; then
+  TYPE="${1#--}"
+  shift
+fi
 
-  if [[ "$RAW_URL" =~ /Formula/([^/]+)\.rb($|\?) ]]; then
+# Next argument must be either a name or a raw URL
+TARGET="${1:-}"
+shift || true
+
+if [[ -z "$TARGET" ]]; then
+  echo "Error: missing target (name or raw URL)."
+  echo
+  print_help
+  exit 2
+fi
+
+# Optional next arg may be commit-sha or raw-url (only for long form)
+POSSIBLE_COMMIT_OR_URL="${1:-}"
+if [[ -n "${POSSIBLE_COMMIT_OR_URL}" && ! "${POSSIBLE_COMMIT_OR_URL}" =~ ^https?:// ]]; then
+  # it's probably a commit SHA; keep it and shift
+  COMMIT_OR_URL="$POSSIBLE_COMMIT_OR_URL"
+  shift
+else
+  COMMIT_OR_URL="${POSSIBLE_COMMIT_OR_URL:-}"
+  # if it was a URL we will handle it below; if empty, leave empty
+  if [[ -n "$COMMIT_OR_URL" && "$COMMIT_OR_URL" =~ ^https?:// ]]; then
+    # leave it as-is and shift
+    shift
+  fi
+fi
+
+# Optional tap argument (last positional)
+TAP="${1:-${USER}/local}"
+
+# Determine whether TARGET is a URL
+
+RAW_URL=""
+NAME=""
+
+if is_url "$TARGET"; then
+  RAW_URL="$TARGET"
+  # Short form: TARGET is a raw URL; try to infer type and name from URL
+  RAW_URL="$TARGET"
+  TAP="${COMMIT_OR_URL:-$TAP}"  # if user passed only two args, second may be tap
+
+  # Strip query string for matching
+  url_path="${RAW_URL%%\?*}"
+
+  # Try patterns that include optional first-letter subdir, prefer explicit Casks/Formula
+  if [[ "$url_path" =~ /Formula/([^/]+)\.rb$ ]]; then
     NAME="${BASH_REMATCH[1]}"
+    TYPE="formula"
+  elif [[ "$url_path" =~ /Formula/[^/]+/([^/]+)\.rb$ ]]; then
+    NAME="${BASH_REMATCH[1]}"
+    TYPE="formula"
+  elif [[ "$url_path" =~ /Casks/([^/]+)\.rb$ ]]; then
+    NAME="${BASH_REMATCH[1]}"
+    TYPE="cask"
+  elif [[ "$url_path" =~ /Casks/[^/]+/([^/]+)\.rb$ ]]; then
+    NAME="${BASH_REMATCH[1]}"
+    TYPE="cask"
   else
-    filename="$(basename "${RAW_URL%%\?*}")"
+    # Fallback: use basename and try to infer type from the path
+    filename="$(basename "$url_path")"
     if [[ "$filename" =~ \.rb$ ]]; then
       NAME="${filename%.rb}"
     else
-      echo "Warning: could not reliably extract name/type from URL. Using '${filename}' as name and type '${TYPE}'."
-      echo "Tip: prefer URLs containing /Formula/<name>.rb or /Casks/<name>.rb for reliable extraction."
       NAME="$filename"
     fi
-  fi
-else
-  # Long form: ACTION <formula> <commit-sha|raw-url> [tap]
-  NAME="$ARG2"
-  COMMIT_OR_URL="$ARG3"
-  TAP="${ARG4:-${USER}/local}"
 
-  if [[ -z "$FORMULA" || -z "$COMMIT_OR_URL" ]]; then
-    echo "Error: missing arguments."
+    if [[ "$url_path" =~ /Casks/ ]]; then
+      TYPE="cask"
+    elif [[ "$url_path" =~ /Formula/ ]]; then
+      TYPE="formula"
+    else
+      echo "Warning: could not reliably extract name/type from URL. Using '${NAME}' as name and type '${TYPE}'."
+      echo "Tip: prefer URLs containing /Formula/<name>.rb or /Casks/<name>.rb for reliable extraction."
+    fi
+  fi
+
+else
+  # TARGET is a name; use it and build RAW_URL from COMMIT_OR_URL (if provided)
+  NAME="$TARGET"
+  if [[ -z "${COMMIT_OR_URL:-}" ]]; then
+    echo "Error: missing commit-sha or raw URL for name '${NAME}'."
     echo
     print_help
     exit 2
