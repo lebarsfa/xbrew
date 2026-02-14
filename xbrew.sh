@@ -61,6 +61,9 @@ Examples:
   # Reinstall a cask from a raw URL (type inferred from URL)
   xbrew reinstall https://raw.githubusercontent.com/Homebrew/homebrew-cask/06eed90d6268ed8c26e23b0458a43f8d3317f66c/Casks/c/cmake.rb
 
+  # Reinstall from a version (may be slow and inaccurate, as it scans commit history for matches)
+  xbrew reinstall doxygen 1.9.6
+
   # Install using a full raw URL treated as a formula, and a custom tap
   xbrew install --formula \
     https://raw.githubusercontent.com/Homebrew/homebrew-core/d2267b9f2ad247bc9c8273eb755b39566a474a70/Formula/doxygen.rb \
@@ -71,8 +74,8 @@ Behavior and notes:
     from the URL path (/Formula/ or /Casks/, strip .rb). Prefer URLs containing those paths.
   - If you pass a name and version, the script will try to find the right commit by
     scanning homebrew-core or homebrew-cask commit history for that formula/cask until it finds a match.
-    For now, this can be very slow (up to several minutes) and inaccurate.
-    export GITHUB_TOKEN=ghp_XXX can be run before to speed up GitHub API requests and increase rate limits, 
+    For now, this can be slow and inaccurate.
+    export GITHUB_TOKEN=ghp_XXX can be run before to possibly speed up GitHub API requests and increase rate limits, 
     see https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens.
   - The script commits the downloaded file into a local tap (Formula/ or Casks/)
     and then runs brew install or brew reinstall (with --cask for casks); it will not pin the formula or cask.
@@ -122,12 +125,15 @@ homebrew_find_rb() {
   SECOND="$2"            # either VERSION or COMMIT SHA
   TYPE="${3:-formula}"    # "formula" or "cask"
   UA="hb-finder/1.0"
-  SLEEP_SHORT=0 #0.05
-  SLEEP_PAGE=0 #0.2
+  #SLEEP_SHORT=0.05
+  #SLEEP_PAGE=0.2  
+  SLEEP_SHORT=0
+  SLEEP_PAGE=0
   MAX_PAGES=1000000
   PAGE=1
   AUTH_HEADER=""
   [ -n "${GITHUB_TOKEN:-}" ] && AUTH_HEADER="-H Authorization: token ${GITHUB_TOKEN}"
+  : ${DEBUG:=0}
 
   if [ -z "$NAME" ]; then
     printf '%s\n' "Usage: homebrew_find_rb <NAME> [VERSION|COMMIT] [TYPE]" >&2
@@ -181,24 +187,38 @@ homebrew_find_rb() {
   }
   CLASS_NAME=$(to_camel "$NAME")
 
-  # build semver-aware regex from WANT_VER
+  # Escape a string for use in a grep -E literal match
+  escape_for_grepE() {
+    printf '%s' "$1" | sed -E 's/[][^$.*/\\+?(){}|]/\\&/g'
+  }
+
   build_ver_regex() {
     v="$1"
     ver_regex=""
     [ -z "$v" ] && return 0
     raw=$(printf '%s' "$v" | sed -E 's/^[vV]//; s/[^0-9.].*$//')
-    parts=$(printf '%s' "$raw" | awk -F. '{print NF}')
-    esc=$(printf '%s' "$raw" | sed -E 's/\./\\./g')
-    if [ "$parts" -le 1 ]; then
-      pattern="${esc}(\\.(0)){0,2}"
-    elif [ "$parts" -eq 2 ]; then
-      pattern="${esc}(\\.(0)){0,1}"
-    else
-      pattern="${esc}"
+    IFS='.' read -r -a comps <<< "$raw"
+    if [ "${#comps[@]}" -eq 0 ]; then
+      return 0
     fi
-    ver_regex="(^|[^0-9A-Za-z_.-])[vV]?${pattern}([^0-9A-Za-z_.-]|$)"
+    pattern=""
+    for i in "${!comps[@]}"; do
+      num="${comps[$i]}"
+      num=$(printf '%s' "$num" | sed -E 's/[^0-9]//g')
+      if [ -z "$num" ]; then
+        num="${comps[$i]}"
+      fi
+      if [ "$i" -eq 0 ]; then
+        pattern="${num}"
+      else
+        pattern="${pattern}([._-])${num}"
+      fi
+    done
+    ver_regex="(^|[^0-9A-Za-z])[vV]?(${pattern}|Release[_-]?${pattern})([^0-9A-Za-z]|$)"
   }
   build_ver_regex "$WANT_VER"
+
+  WANT_VER_ESC=$(escape_for_grepE "$WANT_VER")
 
   fetch_shas_from_page() {
     page_url="$1"
@@ -232,27 +252,32 @@ homebrew_find_rb() {
       return 0
     fi
 
-    # prefer explicit version and url lines, then stable block, then fallback regex
+    # Debug output to stderr so it is visible even when stdout is captured
+    if [ "$DEBUG" -eq 1 ]; then
+      printf '%s\n' "DEBUG: checking ${raw_url}" >&2
+      printf '%s\n' "DEBUG: ver_regex=${ver_regex}" >&2
+      printf '%s\n' "DEBUG: WANT_VER_ESC=${WANT_VER_ESC}" >&2
+      # show a short preview of sanitized content for context
+      printf '%s\n' "DEBUG: sanitized preview:" >&2
+      printf '%s\n' "%s" "$(printf '%s' "$sanitized" | sed -n '1,40p')" >&2
+    fi
+
     if [ -n "$ver_regex" ] && printf '%s' "$sanitized" | grep -Eiq "version[[:space:]]+['\"][^'\"]*"; then
-      if printf '%s' "$sanitized" | grep -Eiq "version[[:space:]]+['\"][^'\"]*${WANT_VER}[^'\"]*['\"]"; then
+      if printf '%s' "$sanitized" | grep -Eiq "version[[:space:]]+['\"][^'\"]*${ver_regex}[^'\"]*['\"]"; then
         printf '%s\n' "$raw_url"; return 0
       fi
     fi
 
-    if [ -n "$ver_regex" ] && printf '%s' "$sanitized" | grep -Eiq "url[[:space:]]+.*${WANT_VER}"; then
+    if [ -n "$ver_regex" ] && printf '%s' "$sanitized" | grep -Eiq "url[[:space:]]+.*${ver_regex}"; then
       printf '%s\n' "$raw_url"; return 0
     fi
 
-    if [ -n "$ver_regex" ] && printf '%s' "$sanitized" | awk -v v="$WANT_VER" '
+    if [ -n "$ver_regex" ] && printf '%s' "$sanitized" | awk -v re="$ver_regex" '
       BEGIN{IGNORECASE=1; in_stable=0; found=0}
       /stable[[:space:]]+do/ { in_stable=1; next }
       /^\s*end\s*$/ && in_stable { in_stable=0; next }
-      in_stable && tolower($0) ~ tolower(v) { found=1; exit }
+      in_stable && $0 ~ re { found=1; exit }
       END{ exit !found }' ; then
-      printf '%s\n' "$raw_url"; return 0
-    fi
-
-    if [ -n "$ver_regex" ] && printf '%s' "$sanitized" | grep -Eiq "$ver_regex"; then
       printf '%s\n' "$raw_url"; return 0
     fi
 
@@ -262,17 +287,28 @@ homebrew_find_rb() {
   check_commit_message_for_match() {
     sha="$1"
     path_try="$2"
-    commit_url="https://github.com/$(printf '%s' "$COMMITS_BASE" | sed -E 's#https://github.com/##')/commit/${sha}"
+    repo_base=$(printf '%s' "$COMMITS_BASE" | sed -E 's#/commits/HEAD##')
+    commit_url="${repo_base}/commit/${sha}"
     title=$(curl -s $AUTH_HEADER -A "$UA" "$commit_url" \
       | sed -n 's/.*<title>\(.*\)<\/title>.*/\1/p' \
       | sed -E 's/ · .*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
     [ -n "$title" ] || return 1
+
+    if [ "$DEBUG" -eq 1 ]; then
+      printf '%s\n' "DEBUG: commit ${sha} title: ${title}" >&2
+    fi
+
+    if [ -n "$WANT_VER" ] && [ -n "$ver_regex" ]; then
+      if printf '%s' "$title" | grep -Eiq "$ver_regex"; then
+        printf '%s\n' "${RAW_BASE}/${sha}/${path_try}"; return 0
+      fi
+      return 1
+    fi
+
     if printf '%s' "$title" | grep -Eiq "${NAME}"; then
       printf '%s\n' "${RAW_BASE}/${sha}/${path_try}"; return 0
     fi
-    if [ -n "$WANT_VER" ] && [ -n "$ver_regex" ] && printf '%s' "$title" | grep -Eiq "$ver_regex"; then
-      printf '%s\n' "${RAW_BASE}/${sha}/${path_try}"; return 0
-    fi
+
     return 1
   }
 
@@ -285,23 +321,23 @@ homebrew_find_rb() {
         continue
       fi
 
-      printf '%s\n' "$shas" | while IFS= read -r sha; do
+      # Use process substitution so the while loop runs in the current shell (not a subshell)
+      while IFS= read -r sha; do
         [ -z "$sha" ] && continue
 
         if url=$(check_content_for_match "$sha" "$path_try"); then
-          printf '%s\n' "$url"; exit 0
+          printf '%s\n' "$url"
+          return 0
         fi
 
         if cm_url=$(check_commit_message_for_match "$sha" "$path_try"); then
-          printf '%s\n' "$cm_url"; exit 0
+          printf '%s\n' "$cm_url"
+          return 0
         fi
 
         sleep "$SLEEP_SHORT"
-      done
+      done < <(printf '%s\n' "$shas")
 
-      if [ $? -eq 0 ]; then
-        return 0
-      fi
     done
 
     PAGE=$((PAGE + 1))

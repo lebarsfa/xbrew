@@ -25,8 +25,10 @@ jobs:
         brew info doxygen
         xbrew reinstall doxygen d2267b9f2ad247bc9c8273eb755b39566a474a70
         xbrew reinstall https://raw.githubusercontent.com/Homebrew/homebrew-core/d2267b9f2ad247bc9c8273eb755b39566a474a70/Formula/doxygen.rb
+        xbrew reinstall doxygen 1.9.6
         brew pin doxygen
         brew info cmake
         xbrew reinstall --cask cmake 06eed90d6268ed8c26e23b0458a43f8d3317f66c
         xbrew reinstall https://raw.githubusercontent.com/Homebrew/homebrew-cask/06eed90d6268ed8c26e23b0458a43f8d3317f66c/Casks/c/cmake.rb
+        xbrew reinstall --cask cmake 3.31.6
         brew pin cmake

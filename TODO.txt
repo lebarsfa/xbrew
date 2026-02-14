@@ -1,6 +1,6 @@
 See https://github.com/orgs/Homebrew/discussions/155
 
-Version search very slow, probably subject to rate limiting...
+Version search probably subject to rate limiting...
 
 Optional --no-update-format flag to prevent "conflict_with" lines from being removed from the .rb.
 

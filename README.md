@@ -25,8 +25,10 @@ xbrew -h
 Examples for a formula:
 ```bash
 xbrew reinstall doxygen d2267b9f2ad247bc9c8273eb755b39566a474a70
-# Or
+# or
 xbrew reinstall https://raw.githubusercontent.com/Homebrew/homebrew-core/d2267b9f2ad247bc9c8273eb755b39566a474a70/Formula/doxygen.rb
+# or (but slow and possibly inaccurate)
+xbrew reinstall doxygen 1.9.6
 # Pin the formula to prevent it from being upgraded in the future
 brew pin doxygen
 ```
@@ -34,8 +36,10 @@ brew pin doxygen
 Examples for a cask:
 ```bash
 xbrew reinstall --cask cmake 06eed90d6268ed8c26e23b0458a43f8d3317f66c
-# Or
+# or
 xbrew reinstall https://raw.githubusercontent.com/Homebrew/homebrew-cask/06eed90d6268ed8c26e23b0458a43f8d3317f66c/Casks/c/cmake.rb
+# or (but slow and possibly inaccurate)
+xbrew reinstall --cask cmake 3.31.6
 # Pin the cask to prevent it from being upgraded in the future
 brew pin cmake
 ```
