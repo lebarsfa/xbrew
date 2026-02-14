@@ -14,7 +14,7 @@ Installation:
   sudo chmod +x /usr/local/bin/xbrew
 
 Usage:
-  xbrew <install|reinstall> [--formula|--cask] <formula or cask name> <commit-sha|raw-url> [tap]
+  xbrew <install|reinstall> [--formula|--cask] <formula or cask name> <version|commit-sha|raw-url> [tap]
   OR
   xbrew <install|reinstall> [--formula|--cask] <raw-url> [tap]   # formula or cask name omitted, extracted from URL
 
@@ -25,11 +25,10 @@ Purpose:
   formula.
 
 Parameters:
-  <install|reinstall>       Action to perform (install or reinstall).
-  <formula or cask name>    Formula or cask name name (e.g. doxygen).
-  <commit-sha|raw-url>      Commit SHA in homebrew-core or a full raw.githubusercontent URL
-                            pointing to the formula file.
-  [tap]                     Optional tap name (default: "$USER/local").
+  <install|reinstall>           Action to perform (install or reinstall).
+  <formula or cask name>        Formula or cask name name (e.g. doxygen).
+  <version|commit-sha|raw-url>  Version or commit SHA in homebrew-core or a full raw.githubusercontent URL pointing to the formula file.
+  [tap]                         Optional tap name (default: "$USER/local").
 
 Options:
   --formula    Treat target as a formula (default).
@@ -70,28 +69,45 @@ Examples:
 Behavior and notes:
   - If you pass only a full raw URL, the script will try to extract the name and type
     from the URL path (/Formula/ or /Casks/, strip .rb). Prefer URLs containing those paths.
+  - If you pass a name and version, the script will try to find the right commit by
+    scanning homebrew-core or homebrew-cask commit history for that formula/cask until it finds a match.
+    For now, this can be very slow (up to several minutes) and inaccurate.
+    export GITHUB_TOKEN=ghp_XXX can be run before to speed up GitHub API requests and increase rate limits, 
+    see https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens.
   - The script commits the downloaded file into a local tap (Formula/ or Casks/)
-    and then runs brew install or brew reinstall (with --cask for casks).; it will not pin the formula or cask.
-  - Inspect the file at $(brew --repo "<tap>")/Formula/<name>.rb or .../Casks/<name>.rb before installing
-    if you want to review changes or verify provenance.
+    and then runs brew install or brew reinstall (with --cask for casks); it will not pin the formula or cask.
   - Use a trusted commit or URL only; the script does not sandbox or validate
     formula contents beyond a non-empty download check.
-  - To reproduce on other machines, push the tap repo to a remote and `brew tap`
-    that remote on the target machines.
 EOF
 }
 
 # Helper: test whether a URL exists (use HEAD; fall back to GET if HEAD unsupported)
 url_exists() {
   local url="$1"
-  # try HEAD first
-  if curl -fsI --retry 2 --retry-delay 1 "$url" >/dev/null 2>&1; then
+  shift
+  local extra_args=("$@")
+
+  local normalized=()
+  local arg
+  for arg in "${extra_args[@]}"; do
+    [ -z "$arg" ] && continue   # skip empty args
+    if [[ $arg == -H* && $arg == *' '* ]]; then
+      normalized+=("${arg%% *}" "${arg#* }")
+    else
+      normalized+=("$arg")
+    fi
+  done
+
+  # try HEAD first (silence stderr)
+  if curl -fsI --retry 2 --retry-delay 1 "${normalized[@]}" "$url" >/dev/null 2>/dev/null; then
     return 0
   fi
-  # fallback to a lightweight GET (some servers don't support HEAD)
-  if curl -fsS --retry 2 --retry-delay 1 --max-time 10 -o /dev/null "$url"; then
+
+  # fallback to lightweight GET (also silence stderr)
+  if curl -fsS --retry 2 --retry-delay 1 --max-time 10 -o /dev/null "${normalized[@]}" "$url" >/dev/null 2>/dev/null; then
     return 0
   fi
+
   return 1
 }
 
@@ -100,7 +116,211 @@ is_url() {
   [[ "$1" =~ ^https?:// ]]
 }
 
-# show help early if requested
+# Helper: find the raw URL for a given formula/cask name and version or commit by scanning homebrew-core or homebrew-cask commit history
+homebrew_find_rb() {
+  NAME="$1"
+  SECOND="$2"            # either VERSION or COMMIT SHA
+  TYPE="${3:-formula}"    # "formula" or "cask"
+  UA="hb-finder/1.0"
+  SLEEP_SHORT=0 #0.05
+  SLEEP_PAGE=0 #0.2
+  MAX_PAGES=1000000
+  PAGE=1
+  AUTH_HEADER=""
+  [ -n "${GITHUB_TOKEN:-}" ] && AUTH_HEADER="-H Authorization: token ${GITHUB_TOKEN}"
+
+  if [ -z "$NAME" ]; then
+    printf '%s\n' "Usage: homebrew_find_rb <NAME> [VERSION|COMMIT] [TYPE]" >&2
+    return 2
+  fi
+
+  FIRST_LETTER=$(printf '%s' "$NAME" | cut -c1 | tr '[:upper:]' '[:lower:]')
+
+  if [ "$TYPE" = "cask" ]; then
+    COMMITS_BASE="https://github.com/Homebrew/homebrew-cask/commits/HEAD"
+    RAW_BASE="https://raw.githubusercontent.com/Homebrew/homebrew-cask"
+    PATHS="Casks/${FIRST_LETTER}/${NAME}.rb Casks/${NAME}.rb"
+  else
+    COMMITS_BASE="https://github.com/Homebrew/homebrew-core/commits/HEAD"
+    RAW_BASE="https://raw.githubusercontent.com/Homebrew/homebrew-core"
+    PATHS="Formula/${FIRST_LETTER}/${NAME}.rb Formula/${NAME}.rb"
+  fi
+
+  # Determine whether SECOND looks like a commit SHA (7-40 hex chars)
+  is_sha() {
+    case "$1" in
+      '' ) return 1 ;;
+      * ) printf '%s' "$1" | grep -Eiq '^[0-9a-f]{7,40}$' && return 0 || return 1 ;;
+    esac
+  }
+
+  # If SECOND is a SHA, check the explicit raw URLs and return the first that exists
+  if is_sha "$SECOND"; then
+    sha="$SECOND"
+    for path_try in $PATHS; do
+      url="${RAW_BASE}/${sha}/${path_try}"
+      if url_exists "$url" -A "$UA" "$AUTH_HEADER"; then
+        printf '%s\n' "$url"
+        return 0
+      fi
+      sleep "$SLEEP_SHORT"
+    done
+    printf '%s\n' "No file found at commit ${sha} for ${NAME}" >&2
+    return 3
+  fi
+
+  # Otherwise treat SECOND as a version (or empty)
+  WANT_VER="$SECOND"
+
+  # helper: convert name to CamelCase (optional class detection)
+  to_camel() {
+    printf '%s' "$1" \
+      | sed -E 's/[-_]+/ /g' \
+      | awk '{ for(i=1;i<=NF;i++){ $i = toupper(substr($i,1,1)) substr($i,2) } print }' \
+      | tr -d ' '
+  }
+  CLASS_NAME=$(to_camel "$NAME")
+
+  # build semver-aware regex from WANT_VER
+  build_ver_regex() {
+    v="$1"
+    ver_regex=""
+    [ -z "$v" ] && return 0
+    raw=$(printf '%s' "$v" | sed -E 's/^[vV]//; s/[^0-9.].*$//')
+    parts=$(printf '%s' "$raw" | awk -F. '{print NF}')
+    esc=$(printf '%s' "$raw" | sed -E 's/\./\\./g')
+    if [ "$parts" -le 1 ]; then
+      pattern="${esc}(\\.(0)){0,2}"
+    elif [ "$parts" -eq 2 ]; then
+      pattern="${esc}(\\.(0)){0,1}"
+    else
+      pattern="${esc}"
+    fi
+    ver_regex="(^|[^0-9A-Za-z_.-])[vV]?${pattern}([^0-9A-Za-z_.-]|$)"
+  }
+  build_ver_regex "$WANT_VER"
+
+  fetch_shas_from_page() {
+    page_url="$1"
+    curl -s $AUTH_HEADER -A "$UA" "$page_url" \
+      | grep -oE '/Homebrew/(homebrew-core|homebrew-cask)/commit/[0-9a-f]{7,40}' \
+      | sed -E 's#.*/commit/([0-9a-f]{7,40}).*#\1#' \
+      | awk '!seen[$0]++'
+  }
+
+  sanitize_content() {
+    awk '
+      BEGIN { skip=0 }
+      /^\s*(fails_with|resource|bottle|patch|on_macos|on_linux)\b/ { skip=1; next }
+      /^\s*end\s*$/ && skip==1 { skip=0; next }
+      skip==1 { next }
+      { print }
+    '
+  }
+
+  check_content_for_match() {
+    sha="$1"
+    path="$2"
+    raw_url="${RAW_BASE}/${sha}/${path}"
+    content=$(curl -s --max-time 10 -A "$UA" $AUTH_HEADER "$raw_url") || return 1
+    [ -n "$content" ] || return 1
+    no_comments=$(printf '%s' "$content" | sed -E 's/#.*$//')
+    sanitized=$(printf '%s' "$no_comments" | sanitize_content)
+
+    if [ -z "$WANT_VER" ]; then
+      printf '%s\n' "$raw_url"
+      return 0
+    fi
+
+    # prefer explicit version and url lines, then stable block, then fallback regex
+    if [ -n "$ver_regex" ] && printf '%s' "$sanitized" | grep -Eiq "version[[:space:]]+['\"][^'\"]*"; then
+      if printf '%s' "$sanitized" | grep -Eiq "version[[:space:]]+['\"][^'\"]*${WANT_VER}[^'\"]*['\"]"; then
+        printf '%s\n' "$raw_url"; return 0
+      fi
+    fi
+
+    if [ -n "$ver_regex" ] && printf '%s' "$sanitized" | grep -Eiq "url[[:space:]]+.*${WANT_VER}"; then
+      printf '%s\n' "$raw_url"; return 0
+    fi
+
+    if [ -n "$ver_regex" ] && printf '%s' "$sanitized" | awk -v v="$WANT_VER" '
+      BEGIN{IGNORECASE=1; in_stable=0; found=0}
+      /stable[[:space:]]+do/ { in_stable=1; next }
+      /^\s*end\s*$/ && in_stable { in_stable=0; next }
+      in_stable && tolower($0) ~ tolower(v) { found=1; exit }
+      END{ exit !found }' ; then
+      printf '%s\n' "$raw_url"; return 0
+    fi
+
+    if [ -n "$ver_regex" ] && printf '%s' "$sanitized" | grep -Eiq "$ver_regex"; then
+      printf '%s\n' "$raw_url"; return 0
+    fi
+
+    return 1
+  }
+
+  check_commit_message_for_match() {
+    sha="$1"
+    path_try="$2"
+    commit_url="https://github.com/$(printf '%s' "$COMMITS_BASE" | sed -E 's#https://github.com/##')/commit/${sha}"
+    title=$(curl -s $AUTH_HEADER -A "$UA" "$commit_url" \
+      | sed -n 's/.*<title>\(.*\)<\/title>.*/\1/p' \
+      | sed -E 's/ · .*//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+    [ -n "$title" ] || return 1
+    if printf '%s' "$title" | grep -Eiq "${NAME}"; then
+      printf '%s\n' "${RAW_BASE}/${sha}/${path_try}"; return 0
+    fi
+    if [ -n "$WANT_VER" ] && [ -n "$ver_regex" ] && printf '%s' "$title" | grep -Eiq "$ver_regex"; then
+      printf '%s\n' "${RAW_BASE}/${sha}/${path_try}"; return 0
+    fi
+    return 1
+  }
+
+  # main loop: page through commits for each candidate path
+  while [ "$PAGE" -le "$MAX_PAGES" ]; do
+    for path_try in $PATHS; do
+      page_url="${COMMITS_BASE}/${path_try}?page=${PAGE}"
+      shas=$(fetch_shas_from_page "$page_url")
+      if [ -z "$shas" ]; then
+        continue
+      fi
+
+      printf '%s\n' "$shas" | while IFS= read -r sha; do
+        [ -z "$sha" ] && continue
+
+        if url=$(check_content_for_match "$sha" "$path_try"); then
+          printf '%s\n' "$url"; exit 0
+        fi
+
+        if cm_url=$(check_commit_message_for_match "$sha" "$path_try"); then
+          printf '%s\n' "$cm_url"; exit 0
+        fi
+
+        sleep "$SLEEP_SHORT"
+      done
+
+      if [ $? -eq 0 ]; then
+        return 0
+      fi
+    done
+
+    PAGE=$((PAGE + 1))
+    sleep "$SLEEP_PAGE"
+  done
+
+  # last resort: return HEAD raw URL for the most likely path
+  for path_try in $PATHS; do
+    printf '%s\n' "${RAW_BASE}/HEAD/${path_try}"
+    return 0
+  done
+
+  printf '%s\n' "No match found for ${NAME} ${WANT_VER}" >&2
+  return 3
+}
+
+# Main script starts here
+
+# Show help early if requested
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   print_help
   exit 0
@@ -146,16 +366,16 @@ if [[ -z "$TARGET" ]]; then
   exit 2
 fi
 
-# Optional next arg may be commit-sha or raw-url (only for long form)
-POSSIBLE_COMMIT_OR_URL="${1:-}"
-if [[ -n "${POSSIBLE_COMMIT_OR_URL}" && ! "${POSSIBLE_COMMIT_OR_URL}" =~ ^https?:// ]]; then
-  # it's probably a commit SHA; keep it and shift
-  COMMIT_OR_URL="$POSSIBLE_COMMIT_OR_URL"
+# Optional next arg may be version or commit-sha or raw-url (only for long form)
+POSSIBLE_VER_OR_COMMIT_OR_URL="${1:-}"
+if [[ -n "$POSSIBLE_VER_OR_COMMIT_OR_URL" ]] && ! is_url "$POSSIBLE_VER_OR_COMMIT_OR_URL"; then
+  # it's probably a version or commit SHA; keep it and shift
+  VER_OR_COMMIT_OR_URL="$POSSIBLE_VER_OR_COMMIT_OR_URL"
   shift
 else
-  COMMIT_OR_URL="${POSSIBLE_COMMIT_OR_URL:-}"
+  VER_OR_COMMIT_OR_URL="${POSSIBLE_VER_OR_COMMIT_OR_URL:-}"
   # if it was a URL we will handle it below; if empty, leave empty
-  if [[ -n "$COMMIT_OR_URL" && "$COMMIT_OR_URL" =~ ^https?:// ]]; then
+  if [[ -n "$VER_OR_COMMIT_OR_URL" ]] && is_url "$VER_OR_COMMIT_OR_URL"; then
     # leave it as-is and shift
     shift
   fi
@@ -173,7 +393,7 @@ if is_url "$TARGET"; then
   RAW_URL="$TARGET"
   # Short form: TARGET is a raw URL; try to infer type and name from URL
   RAW_URL="$TARGET"
-  TAP="${COMMIT_OR_URL:-$TAP}"  # if user passed only two args, second may be tap
+  TAP="${VER_OR_COMMIT_OR_URL:-$TAP}"  # if user passed only two args, second may be tap
 
   # Strip query string for matching
   url_path="${RAW_URL%%\?*}"
@@ -211,39 +431,20 @@ if is_url "$TARGET"; then
   fi
 
 else
-  # TARGET is a name; use it and build RAW_URL from COMMIT_OR_URL (if provided)
+  # TARGET is a name; use it and build RAW_URL from VER_OR_COMMIT_OR_URL (if provided)
   NAME="$TARGET"
-  if [[ -z "${COMMIT_OR_URL:-}" ]]; then
-    echo "Error: missing commit-sha or raw URL for name '${NAME}'."
+  if [[ -z "${VER_OR_COMMIT_OR_URL:-}" ]]; then
+    echo "Error: missing version or commit-sha or raw URL for name '${NAME}'."
     echo
     print_help
     exit 2
   fi
 
-  if is_url "$COMMIT_OR_URL"; then
-    RAW_URL="$COMMIT_OR_URL"
+  if is_url "$VER_OR_COMMIT_OR_URL"; then
+    RAW_URL="$VER_OR_COMMIT_OR_URL"
   else
-    # Build candidate raw URLs depending on TYPE (new layout with first-letter subdir, then legacy layout)
-    FIRST_LETTER=$(printf '%s' "$NAME" | cut -c1 | tr '[:upper:]' '[:lower:]')  # Portable, POSIX-friendly first letter (always lower-case)
-    if [[ "$TYPE" == "cask" ]]; then
-      RAW_URL_CAND1="https://raw.githubusercontent.com/Homebrew/homebrew-cask/${COMMIT_OR_URL}/Casks/${FIRST_LETTER}/${NAME}.rb"
-      RAW_URL_CAND2="https://raw.githubusercontent.com/Homebrew/homebrew-cask/${COMMIT_OR_URL}/Casks/${NAME}.rb"
-      if url_exists "$RAW_URL_CAND1"; then
-        RAW_URL="$RAW_URL_CAND1"
-      else
-        RAW_URL="$RAW_URL_CAND2"
-        echo "Warning: falling back to the legacy layout for the raw URL."
-      fi
-    else
-      RAW_URL_CAND1="https://raw.githubusercontent.com/Homebrew/homebrew-core/${COMMIT_OR_URL}/Formula/${FIRST_LETTER}/${NAME}.rb"
-      RAW_URL_CAND2="https://raw.githubusercontent.com/Homebrew/homebrew-core/${COMMIT_OR_URL}/Formula/${NAME}.rb"
-      if url_exists "$RAW_URL_CAND1"; then
-        RAW_URL="$RAW_URL_CAND1"
-      else
-        RAW_URL="$RAW_URL_CAND2"
-        echo "Warning: falling back to the legacy layout for the raw URL."
-      fi
-    fi
+    echo "Finding raw URL for ${TYPE} '${NAME}' with version/commit '${VER_OR_COMMIT_OR_URL}'... This might take a long time and be inaccurate."
+    RAW_URL="$(homebrew_find_rb "$NAME" "$VER_OR_COMMIT_OR_URL" "$TYPE")"
   fi
 fi
 
