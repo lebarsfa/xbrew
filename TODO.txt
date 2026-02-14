@@ -1,0 +1,7 @@
+See https://github.com/orgs/Homebrew/discussions/155
+
+Optional --no-update-format flag to prevent "conflict_with" lines from being removed from the .rb.
+
+Possibility to specify a semver instead of a commit SHA, by searching in commit messages, or optionally in the .rb file to be sure to get the latest commit for that version...
+
+Possibility to pass other options to the final brew install or brew reinstall command, such as --force...
