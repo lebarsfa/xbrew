@@ -14,9 +14,9 @@ Installation:
   sudo chmod +x /usr/local/bin/xbrew
 
 Usage:
-  xbrew <install|reinstall> [--formula|--cask] <formula or cask name> <version|commit-sha|raw-url> [tap]
+  xbrew <install|reinstall> [--formula|--cask] [--dry-run] <formula or cask name> <version|commit-sha|raw-url> [tap]
   OR
-  xbrew <install|reinstall> [--formula|--cask] <raw-url> [tap]   # formula or cask name omitted, extracted from URL
+  xbrew <install|reinstall> [--formula|--cask] [--dry-run] <raw-url> [tap]   # formula or cask name omitted, extracted from URL
 
 Purpose:
   Create (if needed) a local Homebrew tap, fetch the exact Formula/<formula>.rb
@@ -33,6 +33,7 @@ Parameters:
 Options:
   --formula    Treat target as a formula (default).
   --cask       Treat target as a cask.
+  --dry-run    Useful to see what would be done, without performing any action.
   -h, --help   Show this help and exit.
 
 How to find the raw URL or commit SHA on GitHub (web UI)
@@ -391,6 +392,13 @@ if [[ "${1:-}" == "--formula" || "${1:-}" == "--cask" ]]; then
   shift
 fi
 
+# Optional dry-run flag (allowed after optional --formula/--cask)
+DRY_RUN=false
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=true
+  shift
+fi
+
 # Next argument must be either a name or a raw URL
 TARGET="${1:-}"
 shift || true
@@ -498,6 +506,11 @@ echo "Type: $TYPE"
 echo "Name: $NAME"
 echo "Source: $RAW_URL"
 echo
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  echo "Dry run enabled, stopping before performing actions."
+  exit 0
+fi
 
 # Create tap if missing
 if ! brew tap | grep -Fxq "${TAP}"; then
