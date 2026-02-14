@@ -304,6 +304,12 @@ if [[ ! -s "${TMP_FILE}" ]]; then
   exit 3
 fi
 
+# Remove unsupported 'conflicts_with' lines (Homebrew removed support)
+if grep -q "conflicts_with" "$TMP_FILE"; then
+  echo "Removing unsupported 'conflicts_with' lines from formula/cask..."
+  sed -i '' '/conflicts_with/d' "$TMP_FILE"
+fi
+
 # Move into tap repo and commit if changed, with git user fallback
 DEST="${TAP_REPO}/${DEST_DIR}/${NAME}.rb"
 if ! mv "$TMP_FILE" "$DEST"; then
