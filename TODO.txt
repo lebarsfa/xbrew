@@ -1,6 +1,6 @@
 See https://github.com/orgs/Homebrew/discussions/155
 
-Version search probably subject to rate limiting...
+Version search probably subject to rate limiting... -> if gh command available and login done successfully, try the gh part of brew-switch https://github.com/orgs/Homebrew/discussions/155#discussioncomment-7711498 , to check if it could be faster and more accurate...
 
 Optional --no-update-format flag to prevent "conflict_with" lines from being removed from the .rb.
 

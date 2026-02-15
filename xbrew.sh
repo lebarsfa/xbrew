@@ -3,7 +3,7 @@ set -euo pipefail
 
 print_help() {
   cat <<'EOF'
-xbrew — Install or reinstall a Homebrew formula or cask from a specific commit
+xbrew - Install or reinstall a Homebrew formula or cask from a specific commit
 
 Prerequisites:
   brew, git commands.
@@ -19,15 +19,18 @@ Usage:
   xbrew <install|reinstall> [--formula|--cask] [--dry-run] <raw-url> [tap]   # formula or cask name omitted, extracted from URL
 
 Purpose:
-  Create (if needed) a local Homebrew tap, fetch the exact Formula/<formula>.rb
-  from the given commit SHA (or a full raw.githubusercontent URL), commit it into
-  the tap, and run `brew install` or `brew reinstall` against the tap-qualified
-  formula.
+  Create (if needed) a local Homebrew tap, fetch the exact <formula>.rb or
+  <cask>.rb from the given version, commit SHA, or full raw.githubusercontent
+  URL, then commit it into the tap, and run `brew install` or `brew reinstall`
+  against the tap-qualified formula or cask.
 
 Parameters:
   <install|reinstall>           Action to perform (install or reinstall).
-  <formula or cask name>        Formula or cask name name (e.g. doxygen).
-  <version|commit-sha|raw-url>  Version or commit SHA in homebrew-core or a full raw.githubusercontent URL pointing to the formula file.
+  <formula or cask name>        Formula or cask name (e.g. doxygen).
+  <version|commit-sha|raw-url>  Version or commit SHA in
+                                homebrew-core/homebrew-cask or a full
+                                raw.githubusercontent URL pointing to the 
+                                formula/cask file.
   [tap]                         Optional tap name (default: "$USER/local").
 
 Options:
@@ -36,7 +39,7 @@ Options:
   --dry-run    Useful to see what would be done, without performing any action.
   -h, --help   Show this help and exit.
 
-How to find the raw URL or commit SHA on GitHub (web UI)
+How to find manually the raw URL or commit SHA on GitHub (web UI) for a given formula:
   1. Open the formula page in homebrew-core:
        https://github.com/Homebrew/homebrew-core/blob/master/Formula/<f>/<formula>.rb
      or
@@ -44,12 +47,13 @@ How to find the raw URL or commit SHA on GitHub (web UI)
      (replace <formula> with the formula name, e.g., doxygen, and <f> by its first letter, e.g. d, if the first letter is necessary; or check the output of brew info doxygen).
   2. Click the "History" button (top-right of the file view) to see commits that changed that file.
   3. Scan the commit list for the change that introduced the desired version
-     (look for "1.9.6" or the version bump in the commit message or diff).
+     (e.g. look for "1.9.6" or the version bump in the commit message or diff).
   4. Click "View code at this point" in the commit entry to view the file at that commit; then click "Raw".
      The browser address bar now shows the raw URL for that commit, for example:
        https://raw.githubusercontent.com/Homebrew/homebrew-core/<COMMIT_SHA>/Formula/doxygen.rb
   5. Copy that raw URL (or the commit SHA) and pass it to xbrew. Example:
        xbrew install https://raw.githubusercontent.com/Homebrew/homebrew-core/d2267b9f2ad247bc9c8273eb755b39566a474a70/Formula/doxygen.rb
+Note: for casks, adapt to https://github.com/Homebrew/homebrew-cask/blob/master/Casks.
 
 Examples:
   # Reinstall doxygen from a specific homebrew-core commit (default tap: $USER/local)
@@ -71,15 +75,19 @@ Examples:
     myuser/old
 
 Behavior and notes:
-  - If you pass only a full raw URL, the script will try to extract the name and type
-    from the URL path (/Formula/ or /Casks/, strip .rb). Prefer URLs containing those paths.
-  - If you pass a name and version, the script will try to find the right commit by
-    scanning homebrew-core or homebrew-cask commit history for that formula/cask until it finds a match.
+  - If you pass only a full raw URL, the script will try to extract the name
+    and type from the URL path (/Formula/ or /Casks/, strip .rb). Prefer URLs
+    containing those paths.
+  - If you pass a name and version, the script will try to find the right 
+    commit by scanning homebrew-core or homebrew-cask commit history for that
+    formula/cask until it finds a match.
     For now, this can be slow and inaccurate.
-    export GITHUB_TOKEN=ghp_XXX can be run before to possibly speed up GitHub API requests and increase rate limits, 
-    see https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens.
-  - The script commits the downloaded file into a local tap (Formula/ or Casks/)
-    and then runs brew install or brew reinstall (with --cask for casks); it will not pin the formula or cask.
+    export GITHUB_TOKEN=ghp_XXX
+    can be run before to possibly speed up GitHub API requests and increase 
+    rate limits, see https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens.
+  - The script commits the downloaded file into a local tap (Formula/ or 
+    Casks/) and then runs brew install or brew reinstall (with --cask for 
+    casks); it will not pin the formula or cask.
   - Use a trusted commit or URL only; the script does not sandbox or validate
     formula contents beyond a non-empty download check.
 EOF
